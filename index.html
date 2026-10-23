@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Klinik Fasiyal Asimetri & Simetri Analizörü</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  
+  <!-- MediaPipe FaceMesh & Camera Utils via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+
+  <style>
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .font-mono-code {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    /* Custom clinical scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+    /* Oval reticle mask */
+    .face-guide-oval {
+      border: 2px dashed rgba(56, 189, 248, 0.65);
+      border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+      box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.45);
+    }
+  </style>
+</head>
+
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col antialiased selection:bg-cyan-500 selection:text-black">
+
+  <!-- Header / Klinik Başlık -->
+  <header class="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-40 px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+        </svg>
+      </div>
+      <div>
+        <h1 class="text-sm md:text-base font-semibold text-white tracking-tight leading-snug">Fasiyal Asimetri & Simetri Analizörü</h1>
+        <p class="text-[11px] text-slate-400">Plastik & Rekonstrüktif Cerrahi Hemifasiyal Muayene Modülü</p>
+      </div>
+    </div>
+
+    <!-- Status Badge -->
+    <div class="flex items-center gap-2">
+      <span id="statusBadge" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 border border-slate-700">
+        <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+        <span id="statusText">Model Hazırlanıyor</span>
+      </span>
+    </div>
+  </header>
+
+  <!-- Ana Taşıyıcı -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-3 md:p-6 flex flex-col gap-5">
+
+    <!-- Modal / Canlı Kamera Penceresi -->
+    <div id="cameraModal" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md hidden flex-col items-center justify-center p-4">
+      <div class="relative w-full max-w-lg bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden shadow-2xl flex flex-col">
+        <!-- Vizör Üst Bar -->
+        <div class="p-3 bg-slate-950/80 border-b border-slate-800 flex justify-between items-center z-10">
+          <span class="text-xs font-medium text-slate-300 flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-red-500 animate-ping"></span> Canlı Klinik Vizör
+          </span>
+          <button id="closeCameraBtn" class="p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-800 hover:bg-slate-700 transition">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+          </button>
+        </div>
+
+        <!-- Kamera Alanı & Klinik Kılavuz Katmanı -->
+        <div class="relative w-full aspect-[3/4] bg-black flex items-center justify-center overflow-hidden">
+          <video id="webcamVideo" autoplay playsinline muted class="w-full h-full object-cover"></video>
+          
+          <!-- Klinik Pozisyonlama Kılavuzu -->
+          <div class="absolute inset-0 pointer-events-none flex items-center justify-center">
+            <!-- Oval Yüz Maskesi -->
+            <div class="face-guide-oval w-[62%] h-[68%] relative">
+              <!-- Orta Sagittal Aks (Yeşil Çizgi) -->
+              <div class="absolute inset-y-0 left-1/2 -translate-x-1/2 w-[1.5px] bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]"></div>
+              <!-- İki Göz Arası Kantus Kılavuzu (Yatay Mavi Kesikli Çizgi) -->
+              <div class="absolute inset-x-0 top-[40%] h-[1px] border-b border-dashed border-cyan-400/80"></div>
+            </div>
+            <!-- Rehber Bilgi Notu -->
+            <div class="absolute bottom-4 px-3 py-1 bg-black/70 backdrop-blur rounded-full text-[11px] text-cyan-300 border border-cyan-500/30">
+              Gözleri yatay hatta, burun/çeneyi dikey hatta ortalayınız
+            </div>
+          </div>
+        </div>
+
+        <!-- Poz Yakalama Butonu -->
+        <div class="p-4 bg-slate-950/90 border-t border-slate-800 flex justify-center gap-4">
+          <button id="snapPhotoBtn" class="flex items-center gap-2 px-6 py-3 bg-cyan-600 hover:bg-cyan-500 text-white font-medium rounded-xl shadow-lg shadow-cyan-600/30 transition active:scale-95">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+            Fotoğrafı Çek & Analiz Et
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Giriş ve İşlem Seçenekleri Paneli -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <!-- Canlı Çekim Kartı -->
+      <button id="openCameraBtn" class="group flex items-center gap-3.5 p-4 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-cyan-500/50 hover:bg-slate-800/60 transition text-left shadow-sm">
+        <div class="w-11 h-11 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 flex items-center justify-center group-hover:scale-105 transition">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path></svg>
+        </div>
+        <div>
+          <div class="text-sm font-semibold text-white">Canlı Kamera Vizörü</div>
+          <div class="text-xs text-slate-400">Ön/Arka kamera ile kılavuzlu çekim</div>
+        </div>
+      </button>
+
+      <!-- Dosya Yükleme Kartı -->
+      <label class="group flex items-center gap-3.5 p-4 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-cyan-500/50 hover:bg-slate-800/60 transition cursor-pointer shadow-sm">
+        <input type="file" id="fileInput" accept="image/*" class="hidden">
+        <div class="w-11 h-11 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center group-hover:scale-105 transition">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+        </div>
+        <div>
+          <div class="text-sm font-semibold text-white">Arşivden Fotoğraf Seç</div>
+          <div class="text-xs text-slate-400">Klinik JPEG/PNG görseli yükle</div>
+        </div>
+      </label>
+
+      <!-- Rapor Dışa Aktar -->
+      <button id="exportReportBtn" disabled class="group flex items-center gap-3.5 p-4 rounded-xl bg-slate-900/50 border border-slate-800 disabled:opacity-40 disabled:cursor-not-allowed hover:enabled:border-cyan-500/50 hover:enabled:bg-slate-800/60 transition text-left shadow-sm">
+        <div class="w-11 h-11 rounded-lg bg-violet-500/10 border border-violet-500/20 text-violet-400 flex items-center justify-center group-hover:scale-105 transition">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+        </div>
+        <div>
+          <div class="text-sm font-semibold text-white">Klinik Raporu İndir</div>
+          <div class="text-xs text-slate-400">Yüksek çözünürlüklü 3'lü karşılaştırma</div>
+        </div>
+      </button>
+    </div>
+
+    <!-- İnce Ayar Kontrol Paneli (Fine-Tuning) -->
+    <div id="controlsCard" class="hidden bg-slate-900 border border-slate-800 rounded-2xl p-4 md:p-5 shadow-lg flex flex-col gap-4">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+        <div class="flex items-center gap-2">
+          <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path></svg>
+          <span class="text-xs md:text-sm font-medium text-slate-200">Anatomik Aks & Orta Hat İnce Ayarı (Fine-Tuning)</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <button id="toggleGuidesBtn" class="text-xs px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+            Landmark Noktalarını Gizle/Göster
+          </button>
+          <button id="resetAdjustmentsBtn" class="text-xs px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition">
+            Otomatik Değerlere Sıfırla
+          </button>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <!-- Sagittal Orta Hat Kaydırma Slider -->
+        <div class="space-y-1.5">
+          <div class="flex justify-between text-xs">
+            <span class="text-slate-300 font-medium">Sagittal Orta Hat Ofseti (X-Ekseni)</span>
+            <span id="midlineValLabel" class="font-mono-code text-cyan-400">0 px</span>
+          </div>
+          <input type="range" id="midlineSlider" min="-120" max="120" value="0" step="1"
+            class="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500">
+          <div class="flex justify-between text-[10px] text-slate-500">
+            <span>← Hastanın Sağına Kaydır</span>
+            <span>0 (Anatomik Medyan)</span>
+            <span>Hastanın Soluna Kaydır →</span>
+          </div>
+        </div>
+
+        <!-- Roll Eğim Rotasyonu Slider -->
+        <div class="space-y-1.5">
+          <div class="flex justify-between text-xs">
+            <span class="text-slate-300 font-medium">Kafa Eğimi Düzeltmesi (Roll Açısı)</span>
+            <span id="rotationValLabel" class="font-mono-code text-cyan-400">0.0°</span>
+          </div>
+          <input type="range" id="rotationSlider" min="-15" max="15" value="0" step="0.1"
+            class="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500">
+          <div class="flex justify-between text-[10px] text-slate-500">
+            <span>-15.0° (Sola Yatık)</span>
+            <span>0.0° (Kantus Yatay Eksen)</span>
+            <span>+15.0° (Sağa Yatık)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tespit Edilen Anatomik Değer Özeti -->
+      <div id="metricsBar" class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-800/80 text-[11px] font-mono-code text-slate-400">
+        <div>Oto. Roll: <span id="autoRollVal" class="text-slate-200">--</span></div>
+        <div>Nasion X: <span id="nasionVal" class="text-slate-200">--</span></div>
+        <div>Gnathion X: <span id="mentonVal" class="text-slate-200">--</span></div>
+        <div>Orta Hat X: <span id="computedMidVal" class="text-cyan-400 font-semibold">--</span></div>
+      </div>
+    </div>
+
+    <!-- Mobil Görünüm Sekmeleri (Tab Switcher) -->
+    <div class="flex md:hidden bg-slate-900 p-1 rounded-xl border border-slate-800">
+      <button class="view-tab flex-1 py-1.5 text-xs font-medium rounded-lg text-slate-300 transition" data-view="all">Tümü</button>
+      <button class="view-tab flex-1 py-1.5 text-xs font-medium rounded-lg text-slate-400 transition" data-view="rr">Sağ-Sağ</button>
+      <button class="view-tab flex-1 py-1.5 text-xs font-medium rounded-lg bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 transition active" data-view="orig">Orijinal</button>
+      <button class="view-tab flex-1 py-1.5 text-xs font-medium rounded-lg text-slate-400 transition" data-view="ll">Sol-Sol</button>
+    </div>
+
+    <!-- 3'lü Klinik Karşılaştırma Izgarası -->
+    <div id="visualizerGrid" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      
+      <!-- 1. Sağ - Sağ Kompozit -->
+      <div id="cardRR" class="view-card flex flex-col bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-lg transition">
+        <div class="px-3.5 py-2.5 bg-slate-950/60 border-b border-slate-800 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+            <span class="text-xs font-semibold text-slate-200 uppercase tracking-wider">Sağ - Sağ Yüz</span>
+          </div>
+          <span class="text-[10px] px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-medium">Hastanın Sağı</span>
+        </div>
+        <div class="relative w-full aspect-[4/5] bg-slate-950 flex items-center justify-center p-1.5">
+          <canvas id="canvasRight" class="w-full h-full object-contain rounded-lg"></canvas>
+          <div id="rrEmptyState" class="absolute inset-0 flex flex-col items-center justify-center text-slate-600 gap-2 p-4 text-center">
+            <svg class="w-8 h-8 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
+            <span class="text-xs">Sağ hemifasiyal simetri rekonstrüksiyonu</span>
+          </div>
+        </div>
+        <div class="p-2.5 text-[11px] text-slate-400 bg-slate-950/40 border-t border-slate-800/80">
+          Hastanın sağ yüz yarısı sagittal akstan aynalanarak oluşturulmuştur.
+        </div>
+      </div>
+
+      <!-- 2. Orijinal Hizalanmış Görünüm -->
+      <div id="cardOrig" class="view-card flex flex-col bg-slate-900 border border-cyan-500/40 rounded-2xl overflow-hidden shadow-xl shadow-cyan-950/20 transition ring-1 ring-cyan-500/20">
+        <div class="px-3.5 py-2.5 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span class="text-xs font-semibold text-white uppercase tracking-wider">Orijinal (Hizalanmış)</span>
+          </div>
+          <span class="text-[10px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">Referans Akslı</span>
+        </div>
+        <div class="relative w-full aspect-[4/5] bg-slate-950 flex items-center justify-center p-1.5">
+          <canvas id="canvasOriginal" class="w-full h-full object-contain rounded-lg"></canvas>
+          <div id="origEmptyState" class="absolute inset-0 flex flex-col items-center justify-center text-slate-600 gap-2 p-4 text-center">
+            <svg class="w-8 h-8 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+            <span class="text-xs">Hasta fotoğrafı çekiniz veya arşivden yükleyiniz</span>
+          </div>
+        </div>
+        <div class="p-2.5 text-[11px] text-slate-300 bg-slate-950/40 border-t border-slate-800/80 flex items-center justify-between">
+          <span>Kılavuz: <strong class="text-emerald-400">Yeşil Hat</strong> = Sagittal Orta Aks</span>
+          <span class="text-slate-400">Roll: Sıfırlanmış</span>
+        </div>
+      </div>
+
+      <!-- 3. Sol - Sol Kompozit -->
+      <div id="cardLL" class="view-card flex flex-col bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-lg transition">
+        <div class="px-3.5 py-2.5 bg-slate-950/60 border-b border-slate-800 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-violet-400"></span>
+            <span class="text-xs font-semibold text-slate-200 uppercase tracking-wider">Sol - Sol Yüz</span>
+          </div>
+          <span class="text-[10px] px-2 py-0.5 rounded bg-violet-500/10 text-violet-400 border border-violet-500/20 font-medium">Hastanın Solu</span>
+        </div>
+        <div class="relative w-full aspect-[4/5] bg-slate-950 flex items-center justify-center p-1.5">
+          <canvas id="canvasLeft" class="w-full h-full object-contain rounded-lg"></canvas>
+          <div id="llEmptyState" class="absolute inset-0 flex flex-col items-center justify-center text-slate-600 gap-2 p-4 text-center">
+            <svg class="w-8 h-8 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
+            <span class="text-xs">Sol hemifasiyal simetri rekonstrüksiyonu</span>
+          </div>
+        </div>
+        <div class="p-2.5 text-[11px] text-slate-400 bg-slate-950/40 border-t border-slate-800/80">
+          Hastanın sol yüz yarısı sagittal akstan aynalanarak oluşturulmuştur.
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Klinik Bilgilendirme Notu -->
+    <div class="p-3.5 rounded-xl bg-slate-900/50 border border-slate-800/80 flex items-start gap-3 text-xs text-slate-400">
+      <svg class="w-5 h-5 text-cyan-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+      <div>
+        <strong class="text-slate-200">Tıbbi Yönlendirme Kuralı:</strong> Görüntünün sol yarısı hastanın anatomik sağını (Right), görüntünün sağ yarısı ise hastanın anatomik solunu (Left) temsil eder. Tüm hesaplama istemci tarafında (lokal tarayıcıda) işlenir; hasta verileri hiçbir harici sunucuya iletilmez.
+      </div>
+    </div>
+  </main>
+
+  <!-- Bildirim Kutusu (Toast) -->
+  <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl bg-slate-900 text-white border border-slate-700 shadow-2xl text-xs font-medium flex items-center gap-2 opacity-0 pointer-events-none transition-opacity duration-300">
+    <span id="toastDot" class="w-2 h-2 rounded-full bg-cyan-400"></span>
+    <span id="toastMsg">İşlem tamamlandı</span>
+  </div>
+
+  <!-- Javascript Mantığı -->
+  <script>
+    // --- State Yönetimi ---
+    const appState = {
+      rawImage: null,           // HTMLImageElement veya Canvas
+      faceMeshInstance: null,
+      isModelLoaded: false,
+      landmarks: null,          // Ham landmark dizisi
+      autoMidlineX: 0,
+      autoRollDeg: 0,
+      manualOffsetMidline: 0,
+      manualOffsetRoll: 0,
+      showLandmarksOverlay: true,
+      lastDetectedW: 0,
+      lastDetectedH: 0,
+      activeStream: null
+    };
+
+    // DOM Elemanları
+    const statusBadge = document.getElementById('statusBadge');
+    const statusText = document.getElementById('statusText');
+    const openCameraBtn = document.getElementById('openCameraBtn');
+    const cameraModal = document.getElementById('cameraModal');
+    const closeCameraBtn = document.getElementById('closeCameraBtn');
+    const webcamVideo = document.getElementById('webcamVideo');
+    const snapPhotoBtn = document.getElementById('snapPhotoBtn');
+    const fileInput = document.getElementById('fileInput');
+    const exportReportBtn = document.getElementById('exportReportBtn');
+    const controlsCard = document.getElementById('controlsCard');
+    const midlineSlider = document.getElementById('midlineSlider');
+    const midlineValLabel = document.getElementById('midlineValLabel');
+    const rotationSlider = document.getElementById('rotationSlider');
+    const rotationValLabel = document.getElementById('rotationValLabel');
+    const resetAdjustmentsBtn = document.getElementById('resetAdjustmentsBtn');
+    const toggleGuidesBtn = document.getElementById('toggleGuidesBtn');
+    const toast = document.getElementById('toast');
+    const toastMsg = document.getElementById('toastMsg');
+
+    // Canvas Elemanları
+    const canvasRight = document.getElementById('canvasRight');
+    const canvasOriginal = document.getElementById('canvasOriginal');
+    const canvasLeft = document.getElementById('canvasLeft');
+
+    const rrEmptyState = document.getElementById('rrEmptyState');
+    const origEmptyState = document.getElementById('origEmptyState');
+    const llEmptyState = document.getElementById('llEmptyState');
+
+    // Toast Mesaj Gösterici
+    function showToast(msg, isSuccess = true) {
+      toastMsg.innerText = msg;
+      const dot = document.getElementById('toastDot');
+      dot.className = `w-2 h-2 rounded-full ${isSuccess ? 'bg-cyan-400' : 'bg-rose-500'}`;
+      toast.classList.remove('opacity-0', 'pointer-events-none');
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'pointer-events-none');
+      }, 3200);
+    }
+
+    // MediaPipe FaceMesh Başlatma
+    async function initFaceMesh() {
+      try {
+        if (typeof FaceMesh === 'undefined') {
+          throw new Error("MediaPipe kütüphanesi yüklenemedi.");
+        }
+
+        const faceMesh = new FaceMesh({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        });
+
+        faceMesh.setOptions({
+          maxNumFaces: 1,
+          refineLandmarks: true,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        faceMesh.onResults(onFaceMeshResults);
+        appState.faceMeshInstance = faceMesh;
+        appState.isModelLoaded = true;
+
+        statusBadge.className = "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/30";
+        statusText.innerText = "Model Aktif (Hazır)";
+      } catch (err) {
+        console.error("FaceMesh Init Error:", err);
+        statusBadge.className = "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-rose-500/10 text-rose-400 border border-rose-500/30";
+        statusText.innerText = "Model Hatası (Geometrik Mod)";
+      }
+    }
+
+    // Kamera Başlatma
+    openCameraBtn.addEventListener('click', async () => {
+      try {
+        cameraModal.classList.remove('hidden');
+        cameraModal.classList.add('flex');
+        
+        // Mobil uyumlu ve dikey yüksek çözünürlük
+        const constraints = {
+          video: {
+            facingMode: 'user',
+            width: { ideal: 1280 },
+            height: { ideal: 1920 }
+          },
+          audio: false
+        };
+
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        appState.activeStream = stream;
+        webcamVideo.srcObject = stream;
+      } catch (err) {
+        console.error("Kamera hatası:", err);
+        showToast("Kamera erişimi verilemedi. Lütfen izinleri kontrol edin.", false);
+        closeCamera();
+      }
+    });
+
+    function closeCamera() {
+      if (appState.activeStream) {
+        appState.activeStream.getTracks().forEach(track => track.stop());
+        appState.activeStream = null;
+      }
+      cameraModal.classList.add('hidden');
+      cameraModal.classList.remove('flex');
+    }
+
+    closeCameraBtn.addEventListener('click', closeCamera);
+
+    // Fotoğraf Çekme
+    snapPhotoBtn.addEventListener('click', () => {
+      if (!webcamVideo.videoWidth) return;
+      
+      const offCanvas = document.createElement('canvas');
+      offCanvas.width = webcamVideo.videoWidth;
+      offCanvas.height = webcamVideo.videoHeight;
+      const ctx = offCanvas.getContext('2d');
+      ctx.drawImage(webcamVideo, 0, 0);
+
+      const img = new Image();
+      img.onload = () => {
+        closeCamera();
+        processNewImage(img);
+      };
+      img.src = offCanvas.toDataURL('image/jpeg', 0.95);
+    });
+
+    // Dosyadan Yükleme
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          processNewImage(img);
+        };
+        img.src = event.target.result;
+      };
+      reader.readAsDataURL(file);
+      e.target.value = '';
+    });
+
+    // Yeni Fotoğrafı İşleme Al
+    async function processNewImage(imageElement) {
+      appState.rawImage = imageElement;
+      appState.manualOffsetMidline = 0;
+      appState.manualOffsetRoll = 0;
+      midlineSlider.value = 0;
+      rotationSlider.value = 0;
+      midlineValLabel.innerText = "0 px";
+      rotationValLabel.innerText = "0.0°";
+
+      showToast("Görüntü analiz ediliyor...");
+
+      if (appState.faceMeshInstance) {
+        try {
+          await appState.faceMeshInstance.send({ image: imageElement });
+        } catch (err) {
+          console.warn("MediaPipe doğrudan analizi başarısız oldu, geometriğe geçiliyor:", err);
+          fallbackGeometricAnalysis(imageElement);
+        }
+      } else {
+        fallbackGeometricAnalysis(imageElement);
+      }
+    }
+
+    // MediaPipe Sonuçları
+    function onFaceMeshResults(results) {
+      if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+        showToast("Yüz landmarkları saptanamadı. Geometrik merkez referans alındı.", false);
+        fallbackGeometricAnalysis(appState.rawImage);
+        return;
+      }
+
+      const landmarks = results.multiFaceLandmarks[0];
+      appState.landmarks = landmarks;
+
+      const w = appState.rawImage.width;
+      const h = appState.rawImage.height;
+      appState.lastDetectedW = w;
+      appState.lastDetectedH = h;
+
+      // 1. Roll Açısı: Sağ Göz İç Kantus (133) - Sol Göz İç Kantus (362)
+      const pRCanthus = { x: landmarks[133].x * w, y: landmarks[133].y * h };
+      const pLCanthus = { x: landmarks[362].x * w, y: landmarks[362].y * h };
+
+      const dy = pLCanthus.y - pRCanthus.y;
+      const dx = pLCanthus.x - pRCanthus.x;
+      const angleRad = Math.atan2(dy, dx);
+      const angleDeg = angleRad * (180 / Math.PI);
+      appState.autoRollDeg = angleDeg;
+
+      // 2. Orta Hat (Sagittal Midline): Nasion (168), Pronasale (1), Menton (152)
+      const nasionX = landmarks[168].x * w;
+      const pronasaleX = landmarks[1].x * w;
+      const mentonX = landmarks[152].x * w;
+
+      // Ağırlıklı anatomik orta hat
+      appState.autoMidlineX = (nasionX * 0.4) + (pronasaleX * 0.2) + (mentonX * 0.4);
+
+      // Metrikleri Güncelle
+      document.getElementById('autoRollVal').innerText = `${angleDeg.toFixed(1)}°`;
+      document.getElementById('nasionVal').innerText = `${Math.round(nasionX)}px`;
+      document.getElementById('mentonVal').innerText = `${Math.round(mentonX)}px`;
+
+      controlsCard.classList.remove('hidden');
+      exportReportBtn.removeAttribute('disabled');
+
+      // Çizimleri Gerçekleştir
+      renderAllViews();
+      showToast("Anatomik akslar ve orta hat başarıyla saptandı.");
+    }
+
+    // Landmark bulunamazsa Geometrik Yedek (Fallback)
+    function fallbackGeometricAnalysis(img) {
+      const w = img.width;
+      const h = img.height;
+      appState.landmarks = null;
+      appState.autoRollDeg = 0;
+      appState.autoMidlineX = w / 2;
+      appState.lastDetectedW = w;
+      appState.lastDetectedH = h;
+
+      document.getElementById('autoRollVal').innerText = `0.0° (Geometrik)`;
+      document.getElementById('nasionVal').innerText = `${Math.round(w/2)}px`;
+      document.getElementById('mentonVal').innerText = `${Math.round(w/2)}px`;
+
+      controlsCard.classList.remove('hidden');
+      exportReportBtn.removeAttribute('disabled');
+      renderAllViews();
+    }
+
+    // Ana Çizim ve Hemifasiyal Simetri Motoru
+    function renderAllViews() {
+      if (!appState.rawImage) return;
+
+      const img = appState.rawImage;
+      const w = img.width;
+      const h = img.height;
+
+      // Aktif Açı & Orta Hat (Oto + Manuel Ofset)
+      const totalRoll = appState.autoRollDeg + appState.manualOffsetRoll;
+      
+      // 1. Görüntüyü Kafa Roll Açısına Göre Dik Eksenine Döndür
+      const rotatedCanvas = document.createElement('canvas');
+      rotatedCanvas.width = w;
+      rotatedCanvas.height = h;
+      const rCtx = rotatedCanvas.getContext('2d');
+
+      rCtx.save();
+      rCtx.translate(w / 2, h / 2);
+      rCtx.rotate(-totalRoll * Math.PI / 180);
+      rCtx.drawImage(img, -w / 2, -h / 2);
+      rCtx.restore();
+
+      // Sagittal Orta Hat Noktası (Döndürülmüş düzlemde)
+      const effectiveMidX = Math.round(appState.autoMidlineX + appState.manualOffsetMidline);
+      const boundedMidX = Math.max(20, Math.min(w - 20, effectiveMidX));
+      
+      document.getElementById('computedMidVal').innerText = `${boundedMidX}px`;
+
+      // Boş durum bilgilendirmelerini gizle
+      rrEmptyState.classList.add('hidden');
+      origEmptyState.classList.add('hidden');
+      llEmptyState.classList.add('hidden');
+
+      // --- A. ORİJİNAL HİZALANMIŞ KANVAS ---
+      canvasOriginal.width = w;
+      canvasOriginal.height = h;
+      const origCtx = canvasOriginal.getContext('2d');
+      origCtx.drawImage(rotatedCanvas, 0, 0);
+
+      // Kılavuz Çizgileri ve Landmarklar
+      if (appState.showLandmarksOverlay) {
+        // Yeşil Dikey Orta Hat
+        origCtx.save();
+        origCtx.strokeStyle = '#10b981'; // Emerald 500
+        origCtx.lineWidth = Math.max(2, Math.round(w * 0.0035));
+        origCtx.shadowColor = 'rgba(16, 185, 129, 0.7)';
+        origCtx.shadowBlur = 6;
+        origCtx.beginPath();
+        origCtx.moveTo(boundedMidX, 0);
+        origCtx.lineTo(boundedMidX, h);
+        origCtx.stroke();
+        origCtx.restore();
+
+        // Anatomik Noktaları Çiz (Varsa)
+        if (appState.landmarks) {
+          origCtx.save();
+          // Dönmüş düzlem için koordinat transferi (basitleştirilmiş)
+          const lmIndices = [
+            { idx: 168, name: "Nasion", col: "#38bdf8" },
+            { idx: 1, name: "Pronasale", col: "#f59e0b" },
+            { idx: 152, name: "Menton", col: "#a855f7" },
+            { idx: 133, name: "R Canthus", col: "#ec4899" },
+            { idx: 362, name: "L Canthus", col: "#ec4899" }
+          ];
+
+          lmIndices.forEach(item => {
+            const pt = appState.landmarks[item.idx];
+            // Merkez etrafında rotasyon
+            const origX = pt.x * w;
+            const origY = pt.y * h;
+            const rad = -totalRoll * Math.PI / 180;
+            const cx = w / 2;
+            const cy = h / 2;
+            const rotX = cx + (origX - cx) * Math.cos(rad) - (origY - cy) * Math.sin(rad);
+            const rotY = cy + (origX - cx) * Math.sin(rad) + (origY - cy) * Math.cos(rad);
+
+            origCtx.fillStyle = item.col;
+            origCtx.beginPath();
+            origCtx.arc(rotX, rotY, Math.max(3, w * 0.005), 0, Math.PI * 2);
+            origCtx.fill();
+            origCtx.strokeStyle = "#ffffff";
+            origCtx.lineWidth = 1.5;
+            origCtx.stroke();
+          });
+          origCtx.restore();
+        }
+      }
+
+      // --- B. SAĞ - SAĞ YÜZ REKONSTRÜKSİYONU ---
+      // Hastanın sağı = Fotoğrafın solu ([0, boundedMidX] aralığı)
+      canvasRight.width = w;
+      canvasRight.height = h;
+      const rHemCtx = canvasRight.getContext('2d');
+
+      const rightWidth = boundedMidX;
+      // Geçici sol yarı kanvası
+      const tempRightHalf = document.createElement('canvas');
+      tempRightHalf.width = rightWidth;
+      tempRightHalf.height = h;
+      tempRightHalf.getContext('2d').drawImage(rotatedCanvas, 0, 0, rightWidth, h, 0, 0, rightWidth, h);
+
+      // Sağ-Sağ simetrik kanvas (genişlik = 2 * rightWidth)
+      const tempRR = document.createElement('canvas');
+      tempRR.width = rightWidth * 2;
+      tempRR.height = h;
+      const rrCtx = tempRR.getContext('2d');
+
+      // Orijinal sol yarım
+      rrCtx.drawImage(tempRightHalf, 0, 0);
+      // Aynalanmış sağ yarım
+      rrCtx.save();
+      rrCtx.translate(rightWidth * 2, 0);
+      rrCtx.scale(-1, 1);
+      rrCtx.drawImage(tempRightHalf, 0, 0);
+      rrCtx.restore();
+
+      // Ana boyuta uyarlama
+      rHemCtx.drawImage(tempRR, 0, 0, tempRR.width, tempRR.height, 0, 0, w, h);
+
+      // --- C. SOL - SOL YÜZ REKONSTRÜKSİYONU ---
+      // Hastanın solu = Fotoğrafın sağı ([boundedMidX, w] aralığı)
+      canvasLeft.width = w;
+      canvasLeft.height = h;
+      const lHemCtx = canvasLeft.getContext('2d');
+
+      const leftWidth = w - boundedMidX;
+      // Geçici sağ yarı kanvası
+      const tempLeftHalf = document.createElement('canvas');
+      tempLeftHalf.width = leftWidth;
+      tempLeftHalf.height = h;
+      tempLeftHalf.getContext('2d').drawImage(rotatedCanvas, boundedMidX, 0, leftWidth, h, 0, 0, leftWidth, h);
+
+      // Sol-Sol simetrik kanvas (genişlik = 2 * leftWidth)
+      const tempLL = document.createElement('canvas');
+      tempLL.width = leftWidth * 2;
+      tempLL.height = h;
+      const llCtx = tempLL.getContext('2d');
+
+      // Aynalanmış sol parça
+      llCtx.save();
+      llCtx.translate(leftWidth, 0);
+      llCtx.scale(-1, 1);
+      llCtx.drawImage(tempLeftHalf, 0, 0);
+      llCtx.restore();
+      // Orijinal sağ parça
+      llCtx.drawImage(tempLeftHalf, leftWidth, 0);
+
+      // Ana boyuta uyarlama
+      lHemCtx.drawImage(tempLL, 0, 0, tempLL.width, tempLL.height, 0, 0, w, h);
+    }
+
+    // --- Slider & Ayar Olayları ---
+    midlineSlider.addEventListener('input', (e) => {
+      appState.manualOffsetMidline = parseInt(e.target.value, 10);
+      midlineValLabel.innerText = `${appState.manualOffsetMidline > 0 ? '+' : ''}${appState.manualOffsetMidline} px`;
+      renderAllViews();
+    });
+
+    rotationSlider.addEventListener('input', (e) => {
+      appState.manualOffsetRoll = parseFloat(e.target.value);
+      rotationValLabel.innerText = `${appState.manualOffsetRoll > 0 ? '+' : ''}${appState.manualOffsetRoll.toFixed(1)}°`;
+      renderAllViews();
+    });
+
+    resetAdjustmentsBtn.addEventListener('click', () => {
+      appState.manualOffsetMidline = 0;
+      appState.manualOffsetRoll = 0;
+      midlineSlider.value = 0;
+      rotationSlider.value = 0;
+      midlineValLabel.innerText = "0 px";
+      rotationValLabel.innerText = "0.0°";
+      renderAllViews();
+      showToast("Ayarlar otomatik anatomik değerlere sıfırlandı.");
+    });
+
+    toggleGuidesBtn.addEventListener('click', () => {
+      appState.showLandmarksOverlay = !appState.showLandmarksOverlay;
+      renderAllViews();
+      toggleGuidesBtn.innerText = appState.showLandmarksOverlay ? "Landmark Noktalarını Gizle" : "Landmark Noktalarını Göster";
+    });
+
+    // Mobil Tab Değiştirici
+    document.querySelectorAll('.view-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.view-tab').forEach(t => {
+          t.classList.remove('bg-cyan-500/20', 'text-cyan-400', 'border', 'border-cyan-500/30');
+          t.classList.add('text-slate-400');
+        });
+        tab.classList.add('bg-cyan-500/20', 'text-cyan-400', 'border', 'border-cyan-500/30');
+        tab.classList.remove('text-slate-400');
+
+        const view = tab.getAttribute('data-view');
+        const cRR = document.getElementById('cardRR');
+        const cOrig = document.getElementById('cardOrig');
+        const cLL = document.getElementById('cardLL');
+
+        if (view === 'all') {
+          cRR.style.display = 'flex';
+          cOrig.style.display = 'flex';
+          cLL.style.display = 'flex';
+        } else if (view === 'rr') {
+          cRR.style.display = 'flex';
+          cOrig.style.display = 'none';
+          cLL.style.display = 'none';
+        } else if (view === 'orig') {
+          cRR.style.display = 'none';
+          cOrig.style.display = 'flex';
+          cLL.style.display = 'none';
+        } else if (view === 'll') {
+          cRR.style.display = 'none';
+          cOrig.style.display = 'none';
+          cLL.style.display = 'flex';
+        }
+      });
+    });
+
+    // --- Yüksek Çözünürlüklü Rapor / Kolaj İndirme ---
+    exportReportBtn.addEventListener('click', () => {
+      if (!appState.rawImage) return;
+
+      const singleW = canvasOriginal.width;
+      const singleH = canvasOriginal.height;
+      const headerH = 160;
+      const padding = 30;
+
+      const reportCanvas = document.createElement('canvas');
+      reportCanvas.width = (singleW * 3) + (padding * 4);
+      reportCanvas.height = singleH + headerH + (padding * 2);
+
+      const ctx = reportCanvas.getContext('2d');
+
+      // Arka Plan
+      ctx.fillStyle = '#090d16';
+      ctx.fillRect(0, 0, reportCanvas.width, reportCanvas.height);
+
+      // Klinik Başlık ve Metadata
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 36px Inter, sans-serif';
+      ctx.fillText('FASİYAL ASİMETRİ VE HEMİFASİYAL SİMETRİ RAPORU', padding, 55);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '20px Inter, sans-serif';
+      const today = new Date().toLocaleDateString('tr-TR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      ctx.fillText(`Tarih: ${today}  |  Klinik Referans: Anatomik Sagittal Plan Analizi`, padding, 95);
+
+      const activeRoll = (appState.autoRollDeg + appState.manualOffsetRoll).toFixed(1);
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = '18px monospace';
+      ctx.fillText(`Roll Açısı Düzeltmesi: ${activeRoll}°  |  Orta Hat Sapması: ${appState.manualOffsetMidline} px`, padding, 130);
+
+      // Panelleri Çiz
+      const yOffset = headerH + padding;
+
+      // 1. Sağ - Sağ
+      const xRR = padding;
+      ctx.drawImage(canvasRight, xRR, yOffset);
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 22px Inter, sans-serif';
+      ctx.fillText('SAĞ - SAĞ YÜZ (Hastanın Sağı)', xRR + 15, yOffset - 12);
+
+      // 2. Orijinal
+      const xOrig = padding * 2 + singleW;
+      ctx.drawImage(canvasOriginal, xOrig, yOffset);
+      ctx.fillStyle = '#10b981';
+      ctx.font = 'bold 22px Inter, sans-serif';
+      ctx.fillText('ORİJİNAL (Hizalanmış & Orta Hat)', xOrig + 15, yOffset - 12);
+
+      // 3. Sol - Sol
+      const xLL = padding * 3 + (singleW * 2);
+      ctx.drawImage(canvasLeft, xLL, yOffset);
+      ctx.fillStyle = '#c084fc';
+      ctx.font = 'bold 22px Inter, sans-serif';
+      ctx.fillText('SOL - SOL YÜZ (Hastanın Solu)', xLL + 15, yOffset - 12);
+
+      // İndirme Bağlantısı
+      const dataURL = reportCanvas.toDataURL('image/jpeg', 0.95);
+      const link = document.createElement('a');
+      link.download = `Fasiyal_Asimetri_Raporu_${Date.now()}.jpg`;
+      link.href = dataURL;
+      link.click();
+
+      showToast("Klinik rapor kolajı başarıyla indirildi.");
+    });
+
+    // Sayfa Yüklendiğinde Modelleri Başlat
+    window.addEventListener('DOMContentLoaded', () => {
+      initFaceMesh();
+    });
+  </script>
+</body>
+</html>
